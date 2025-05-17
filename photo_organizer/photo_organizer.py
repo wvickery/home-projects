@@ -6,6 +6,7 @@ from PIL import Image
 from PIL.ExifTags import TAGS
 import tkinter as tk
 from tkinter import filedialog, messagebox
+from tkcalendar import DateEntry  # 📅 Calendar picker
 
 # Supported image formats
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tiff", ".bmp")
@@ -49,7 +50,7 @@ def organize_photos(config: OrganizerConfig):
                 continue
 
             year_folder = str(date_taken.year)
-            month_name = date_taken.strftime("%B")
+            month_name = date_taken.strftime("%b").capitalize()  # Abbreviated (Jan, Feb, etc.)
             month_number = date_taken.strftime("%m")
             month_folder = f"{month_number} - {month_name} - {config.suffix}"
 
@@ -97,18 +98,24 @@ def create_gui():
     tk.Button(root, text="Browse", command=lambda: browse_directory(dest_entry)).grid(row=1, column=2)
 
     # Start Date
-    tk.Label(root, text="Start Date (YYYY-MM-DD):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
-    start_entry = tk.Entry(root, width=20)
+    tk.Label(root, text="Start Date (optional):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
+    start_entry = DateEntry(root, width=20, date_pattern="yyyy-mm-dd")
+    start_entry.delete(0, tk.END)  # Allow blank
     start_entry.grid(row=2, column=1, sticky="w")
 
+    tk.Button(root, text="Clear", command=lambda: start_entry.delete(0, tk.END)).grid(row=2, column=2, padx=5)
+
     # End Date
-    tk.Label(root, text="End Date (YYYY-MM-DD):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
-    end_entry = tk.Entry(root, width=20)
+    tk.Label(root, text="End Date (optional):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
+    end_entry = DateEntry(root, width=20, date_pattern="yyyy-mm-dd")
+    end_entry.delete(0, tk.END)  # Allow blank
     end_entry.grid(row=3, column=1, sticky="w")
+
+    tk.Button(root, text="Clear", command=lambda: end_entry.delete(0, tk.END)).grid(row=3, column=2, padx=5)
 
     # Action (Copy or Move)
     tk.Label(root, text="Action:").grid(row=4, column=0, sticky="w", padx=10, pady=5)
-    action_var = tk.StringVar(value="Move")
+    action_var = tk.StringVar(value="Copy")
     action_menu = tk.OptionMenu(root, action_var, "Move", "Copy")
     action_menu.grid(row=4, column=1, sticky="w")
 
@@ -123,20 +130,25 @@ def create_gui():
     status_label.grid(row=7, column=0, columnspan=3, pady=10)
 
     def start_organizing():
-        source = source_entry.get()
-        dest = dest_entry.get()
-        try:
-            start_date = datetime.strptime(start_entry.get(), "%Y-%m-%d")
-            end_date = datetime.strptime(end_entry.get(), "%Y-%m-%d") + timedelta(days=1)
-        except ValueError:
-            messagebox.showerror("Error", "Invalid date format. Use YYYY-MM-DD.")
-            return
+        source = source_entry.get().strip()
+        dest = dest_entry.get().strip()
 
         if not os.path.isdir(source) or not os.path.isdir(dest):
             messagebox.showerror("Error", "Both source and destination folders must be valid.")
             return
 
         suffix = suffix_entry.get().strip() or "Misc"
+
+        # Handle optional start/end date inputs
+        try:
+            start_input = start_entry.get().strip()
+            end_input = end_entry.get().strip()
+
+            start_date = datetime.strptime(start_input, "%Y-%m-%d") if start_input else datetime.min
+            end_date = datetime.strptime(end_input, "%Y-%m-%d") + timedelta(days=1) if end_input else datetime.now()
+        except ValueError:
+            messagebox.showerror("Error", "Invalid date format. Use YYYY-MM-DD.")
+            return
 
         config = OrganizerConfig(
             source_dir=source,
