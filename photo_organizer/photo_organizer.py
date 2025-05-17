@@ -1,12 +1,24 @@
 import os
 import shutil
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 from PIL import Image
 from PIL.ExifTags import TAGS
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
+# Supported image formats
 IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tiff", ".bmp")
+
+@dataclass
+class OrganizerConfig:
+    source_dir: str
+    dest_dir: str
+    start_date: datetime
+    end_date: datetime
+    action: str  # "Copy" or "Move"
+    suffix: str
+    status_label: tk.Label
 
 def get_exif_date_taken(image_path):
     try:
@@ -22,21 +34,26 @@ def get_exif_date_taken(image_path):
         print(f"EXIF error on {image_path}: {e}")
     return None
 
-def organize_photos(source_dir, dest_dir, start_date, end_date, action, status_label):
-    for root, _, files in os.walk(source_dir):
+def organize_photos(config: OrganizerConfig):
+    for root, _, files in os.walk(config.source_dir):
         for file in files:
             if not file.lower().endswith(IMAGE_EXTENSIONS):
                 continue
+
             file_path = os.path.join(root, file)
             date_taken = get_exif_date_taken(file_path)
             if not date_taken:
                 date_taken = datetime.fromtimestamp(os.path.getmtime(file_path))
 
-            if not (start_date <= date_taken <= end_date):
+            if not (config.start_date <= date_taken <= config.end_date):
                 continue
 
-            folder_name = f"{date_taken.year}-{date_taken.month:02d}"
-            dest_folder = os.path.join(dest_dir, folder_name)
+            year_folder = str(date_taken.year)
+            month_name = date_taken.strftime("%B")
+            month_number = date_taken.strftime("%m")
+            month_folder = f"{month_number} - {month_name} - {config.suffix}"
+
+            dest_folder = os.path.join(config.dest_dir, year_folder, month_folder)
             os.makedirs(dest_folder, exist_ok=True)
 
             dest_path = os.path.join(dest_folder, file)
@@ -46,16 +63,16 @@ def organize_photos(source_dir, dest_dir, start_date, end_date, action, status_l
                 dest_path = f"{base}_{counter}{ext}"
                 counter += 1
 
-            if action == "Copy":
+            if config.action == "Copy":
                 shutil.copy2(file_path, dest_path)
             else:
                 shutil.move(file_path, dest_path)
 
-            status_label.config(text=f"{action}ed: {file}")
-            status_label.update_idletasks()
+            config.status_label.config(text=f"{config.action}ed: {file}")
+            config.status_label.update_idletasks()
 
-    messagebox.showinfo("Done", f"Photos {action.lower()}ed successfully!")
-    status_label.config(text="Complete.")
+    messagebox.showinfo("Done", f"Photos {config.action.lower()}ed successfully!")
+    config.status_label.config(text="Complete.")
 
 def browse_directory(entry):
     folder_selected = filedialog.askdirectory()
@@ -103,7 +120,7 @@ def create_gui():
 
     # Status Label
     status_label = tk.Label(root, text="Status: Waiting to start.", fg="blue")
-    status_label.grid(row=6, column=0, columnspan=3, pady=10)
+    status_label.grid(row=7, column=0, columnspan=3, pady=10)
 
     def start_organizing():
         source = source_entry.get()
@@ -119,11 +136,22 @@ def create_gui():
             messagebox.showerror("Error", "Both source and destination folders must be valid.")
             return
 
-        action = action_var.get()
-        organize_photos(source, dest, start_date, end_date, action, status_label)
+        suffix = suffix_entry.get().strip() or "Misc"
+
+        config = OrganizerConfig(
+            source_dir=source,
+            dest_dir=dest,
+            start_date=start_date,
+            end_date=end_date,
+            action=action_var.get(),
+            suffix=suffix,
+            status_label=status_label
+        )
+
+        organize_photos(config)
 
     # Start Button
-    tk.Button(root, text="Start Organizing", command=start_organizing, bg="green", fg="white").grid(row=5, column=1, pady=10)
+    tk.Button(root, text="Start Organizing", command=start_organizing, bg="green", fg="white").grid(row=6, column=1, pady=10)
 
     root.mainloop()
 
