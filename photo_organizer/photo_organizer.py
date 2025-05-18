@@ -146,14 +146,14 @@ def create_gui():
     status_label.grid(row=0, column=0, columnspan=3, pady=5)
 
     tk.Label(root, text="Source Folder:").grid(row=1, column=0, sticky="w", padx=10)
-    source_entry = tk.Entry(root, width=50)
-    source_entry.grid(row=1, column=1)
-    tk.Button(root, text="Browse", command=lambda: [source_entry.delete(0, tk.END), source_entry.insert(0, filedialog.askdirectory()), try_load_preview()]).grid(row=1, column=2)
+    source_entry = tk.Entry(root, width=75)
+    source_entry.grid(row=1, column=1, sticky="we", padx=(0, 5))
+    tk.Button(root, text="Browse", command=lambda: [source_entry.delete(0, tk.END), source_entry.insert(0, filedialog.askdirectory()), try_load_preview()]).grid(row=1, column=2, sticky="e", padx=5)
 
     tk.Label(root, text="Destination Folder:").grid(row=2, column=0, sticky="w", padx=10)
-    dest_entry = tk.Entry(root, width=50)
-    dest_entry.grid(row=2, column=1)
-    tk.Button(root, text="Browse", command=lambda: [dest_entry.delete(0, tk.END), dest_entry.insert(0, filedialog.askdirectory()), try_load_preview()]).grid(row=2, column=2)
+    dest_entry = tk.Entry(root, width=75)
+    dest_entry.grid(row=2, column=1, sticky="we", padx=(0, 5))
+    tk.Button(root, text="Browse", command=lambda: [dest_entry.delete(0, tk.END), dest_entry.insert(0, filedialog.askdirectory()), try_load_preview()]).grid(row=2, column=2, sticky="e", padx=5)
 
     tk.Label(root, text="Folder Suffix:").grid(row=3, column=0, sticky="w", padx=10)
     suffix_entry = tk.Entry(root, width=30)
@@ -162,7 +162,8 @@ def create_gui():
 
     tk.Label(root, text="Action:").grid(row=4, column=0, sticky="w", padx=10)
     action_var = tk.StringVar(value="Copy")
-    tk.OptionMenu(root, action_var, "Copy", "Move").grid(row=4, column=1, sticky="w")
+    action_menu = tk.OptionMenu(root, action_var, "Copy", "Move")
+    action_menu.grid(row=4, column=1, sticky="w")
 
 
     # Scrollable preview frame setup
@@ -180,9 +181,22 @@ def create_gui():
 
     check_vars = {}
 
-    def organize_photos(config: OrganizerConfig):
-        files_to_process = []
+    def set_inputs_enabled(enabled: bool):
+        state = "normal" if enabled else "disabled"
+        source_entry.config(state=state)
+        dest_entry.config(state=state)
+        suffix_entry.config(state=state)
+        action_menu.config(state=state)
 
+    def organize_photos_thread(config: OrganizerConfig):
+        # Step 1: Hide start button and show spinner immediately
+        root.after(0, lambda: start_button.grid_remove())
+        root.after(0, lambda: set_inputs_enabled(False))
+        root.after(0, lambda: spinner_label.config(text="🗂 Preparing to organize..."))
+        root.after(0, lambda: spinner_label.grid(row=6, column=0, columnspan=2, pady=5))
+
+        # Step 2: Build file list
+        files_to_process = []
         for root_dir, _, files in os.walk(config.source_dir):
             for file in files:
                 if not file.lower().endswith(IMAGE_EXTENSIONS):
@@ -200,36 +214,43 @@ def create_gui():
                 files_to_process.append((file_path, dest_path, year, month))
 
         if not files_to_process:
-            messagebox.showinfo("No Files", "No matching files to organize.")
+            root.after(0, lambda: spinner_label.grid_remove())
+            root.after(0, lambda: messagebox.showinfo("No Files", "No matching files to organize."))
+            root.after(0, lambda: start_button.grid())
             return
 
-        # Hide start button, show progress bar and label
-        start_button.grid_remove()
-        progress.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky="we")
-        count_label.grid(row=7, column=0, columnspan=2)
-        progress["value"] = 0
-        root.update()
+        # Step 3: Hide spinner and show progress bar + count
+        root.after(0, lambda: spinner_label.grid_remove())
+        root.after(0, lambda: progress.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky="we"))
+        root.after(0, lambda: count_label.grid(row=7, column=0, columnspan=2))
 
         total = len(files_to_process)
+
+        def update_progress(i, total, current_file):
+            progress["value"] = int((i / total) * 100)
+            count_label.config(text=f"{i} / {total}")
+            config.status_label.config(text=f"{config.action}ed: {os.path.basename(current_file)}")
+            root.update_idletasks()
+
         for i, (src, dest, year, month) in enumerate(files_to_process, 1):
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if config.action == 'Copy':
                 shutil.copy2(src, dest)
             else:
                 shutil.move(src, dest)
+            root.after(0, update_progress, i, total, src)
 
-            config.status_label.config(text=f"{config.action}ed: {os.path.basename(src)}")
-            progress["value"] = int((i / total) * 100)
-            count_label.config(text=f"{i} / {total}")
-            root.update_idletasks()
+        def finish():
+            progress.grid_remove()
+            count_label.grid_remove()
+            start_button.grid()
+            messagebox.showinfo('Done', f'Photos {config.action.lower()}ed successfully!')
+            try_load_preview()
+            config.status_label.config(text='Complete.')
+            set_inputs_enabled(True)
 
-        # Hide progress, show start button again
-        progress.grid_remove()
-        count_label.grid_remove()
-        start_button.grid()
-        messagebox.showinfo('Done', f'Photos {config.action.lower()}ed successfully!')
-        try_load_preview()
-        config.status_label.config(text='Complete.')
+        root.after(0, finish)
+
 
     def try_load_preview():
         source = source_entry.get().strip()
@@ -261,6 +282,7 @@ def create_gui():
             return
         if action_var.get() == "Move" and not messagebox.askyesno("Confirm Move", "Are you sure you want to move files?"):
             return
+
         config = OrganizerConfig(
             source_dir=source,
             dest_dir=dest,
@@ -269,7 +291,8 @@ def create_gui():
             status_label=status_label,
             included_folders=included
         )
-        organize_photos(config)
+
+        threading.Thread(target=lambda: organize_photos_thread(config)).start()
 
     spinner_label = tk.Label(root, text="", fg="gray", font=("Consolas", 10))
     progress = ttk.Progressbar(root, orient="horizontal", mode="determinate", maximum=100)
