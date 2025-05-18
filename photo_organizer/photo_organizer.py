@@ -1,4 +1,4 @@
-# Photo Organizer with Year + Month Toggles, No Date Filters
+# Photo Organizer
 
 import os
 import shutil
@@ -43,62 +43,52 @@ def get_exif_date_taken(image_path):
     return None
 
 def generate_preview(source_dir, dest_dir, suffix):
+    from pathlib import Path
+
     preview = defaultdict(lambda: defaultdict(lambda: FolderStats(0, 0, 0)))
+    touched_paths = defaultdict(set)  # (year, month) → full dest file paths (normalized)
+
     for root, _, files in os.walk(source_dir):
         for file in files:
             if not file.lower().endswith(IMAGE_EXTENSIONS):
                 continue
+
             file_path = os.path.join(root, file)
             try:
                 date_taken = get_exif_date_taken(file_path)
                 if not date_taken:
                     date_taken = datetime.fromtimestamp(os.path.getmtime(file_path))
+
                 year = str(date_taken.year)
                 month = f"{date_taken.strftime('%m')} - {date_taken.strftime('%b').capitalize()} - {suffix}"
                 stats = preview[year][month]
-                stats.new_files += 1
 
                 dest_folder = os.path.join(dest_dir, year, month)
-                dest_path = os.path.join(dest_folder, file)
+                dest_path = os.path.normpath(os.path.join(dest_folder, file))
+
                 if os.path.exists(dest_path):
-                    stats.new_files -= 1
                     stats.updated_files += 1
-                if os.path.exists(dest_folder):
-                    existing = [f for f in os.listdir(dest_folder) if f.lower().endswith(IMAGE_EXTENSIONS)]
-                    stats.existing_files = len(existing)
+                else:
+                    stats.new_files += 1
+
+                touched_paths[(year, month)].add(dest_path)
+
             except Exception:
                 continue
-    return preview
 
-def organize_photos(config: OrganizerConfig):
-    for root, _, files in os.walk(config.source_dir):
-        for file in files:
-            if not file.lower().endswith(IMAGE_EXTENSIONS):
-                continue
-            file_path = os.path.join(root, file)
-            date_taken = get_exif_date_taken(file_path)
-            if not date_taken:
-                date_taken = datetime.fromtimestamp(os.path.getmtime(file_path))
-            year = str(date_taken.year)
-            month = f"{date_taken.strftime('%m')} - {date_taken.strftime('%b').capitalize()} - {config.suffix}"
-            if (year, month) not in config.included_folders:
-                continue
-            dest_folder = os.path.join(config.dest_dir, year, month)
-            os.makedirs(dest_folder, exist_ok=True)
-            dest_path = os.path.join(dest_folder, file)
-            base, ext = os.path.splitext(dest_path)
-            counter = 1
-            while os.path.exists(dest_path):
-                dest_path = f"{base}_{counter}{ext}"
-                counter += 1
-            if config.action == 'Copy':
-                shutil.copy2(file_path, dest_path)
-            else:
-                shutil.move(file_path, dest_path)
-            config.status_label.config(text=f"{config.action}ed: {file}")
-            config.status_label.update_idletasks()
-    messagebox.showinfo('Done', f'Photos {config.action.lower()}ed successfully!')
-    config.status_label.config(text='Complete.')
+    # Count truly untouched files (existing)
+    for (year, month), touched in touched_paths.items():
+        folder_path = os.path.join(dest_dir, year, month)
+        if os.path.exists(folder_path):
+            all_dest_paths = {
+                os.path.normpath(os.path.join(folder_path, f))
+                for f in os.listdir(folder_path)
+                if f.lower().endswith(IMAGE_EXTENSIONS)
+            }
+            untouched = all_dest_paths - touched
+            preview[year][month].existing_files = len(untouched)
+
+    return preview
 
 def build_preview_ui(parent_frame, preview_data):
     check_vars = {}
@@ -116,16 +106,31 @@ def build_preview_ui(parent_frame, preview_data):
     row = 0
     for year, months in sorted(preview_data.items()):
         year_vars[year] = tk.BooleanVar(value=True)
-        year_check = tk.Checkbutton(parent_frame, text=f"{year}/", variable=year_vars[year],
+        year_check = tk.Checkbutton(parent_frame, text=f"{year}/", variable=year_vars[year], fg="black",
                                     command=lambda y=year: toggle_year(y), font=("Consolas", 10, "bold"))
         year_check.grid(row=row, column=0, sticky="w", padx=5, pady=(5, 2))
         row += 1
         for month, stats in sorted(months.items()):
             var = tk.BooleanVar(value=True)
+            cb = tk.Checkbutton(parent_frame, text=month, variable=var, anchor="w", font=("Consolas", 10), fg="black")
+            cb.grid(row=row, column=0, sticky="w", padx=20)
+            summary_frame = tk.Frame(parent_frame)
+            summary_frame.grid(row=row, column=1, sticky="w")
+
+            def colorize(count, color):
+                return color if count > 0 else "gray"
+
+            tk.Label(summary_frame, text="[", fg="black", font=("Consolas", 10)).pack(side="left")
+            tk.Label(summary_frame, text=f"{stats.new_files} new", fg=colorize(stats.new_files, "green"), font=("Consolas", 10)).pack(side="left")
+            tk.Label(summary_frame, text=", ", fg="black", font=("Consolas", 10)).pack(side="left")
+            tk.Label(summary_frame, text=f"{stats.updated_files} updated", fg=colorize(stats.updated_files, "blue"), font=("Consolas", 10)).pack(side="left")
+            tk.Label(summary_frame, text=", ", fg="black", font=("Consolas", 10)).pack(side="left")
+            tk.Label(summary_frame, text=f"{stats.existing_files} existing", fg=colorize(stats.existing_files, "black"), font=("Consolas", 10)).pack(side="left")
+            tk.Label(summary_frame, text="]", fg="black", font=("Consolas", 10)).pack(side="left")
+
             check_vars[(year, month)] = var
-            text = f"  {month}/  [{stats.new_files} new, {stats.updated_files} updated, {stats.existing_files} existing]"
-            color = "green" if stats.new_files > 0 and stats.updated_files == 0 else "blue" if stats.updated_files > 0 else "black"
-            cb = tk.Checkbutton(parent_frame, text=text, variable=var, anchor="w", font=("Consolas", 10), fg=color)
+            row += 1
+            continue
             cb.grid(row=row, column=0, sticky="w", padx=20)
             row += 1
     return check_vars
@@ -133,6 +138,8 @@ def build_preview_ui(parent_frame, preview_data):
 def create_gui():
     root = tk.Tk()
     root.title("Photo Organizer - Toggle Years + Months")
+    root.columnconfigure(1, weight=1)
+    root.rowconfigure(5, weight=1)
     status_label = tk.Label(root, text="Status: Set both folders to generate preview...", fg="blue")
     status_label.grid(row=0, column=0, columnspan=3, pady=5)
 
@@ -171,6 +178,33 @@ def create_gui():
 
 
     check_vars = {}
+
+    def organize_photos(config: OrganizerConfig):
+        for root, _, files in os.walk(config.source_dir):
+            for file in files:
+                if not file.lower().endswith(IMAGE_EXTENSIONS):
+                    continue
+                file_path = os.path.join(root, file)
+                date_taken = get_exif_date_taken(file_path)
+                if not date_taken:
+                    date_taken = datetime.fromtimestamp(os.path.getmtime(file_path))
+                year = str(date_taken.year)
+                month = f"{date_taken.strftime('%m')} - {date_taken.strftime('%b').capitalize()} - {config.suffix}"
+                if (year, month) not in config.included_folders:
+                    continue
+                dest_folder = os.path.join(config.dest_dir, year, month)
+                os.makedirs(dest_folder, exist_ok=True)
+                dest_path = os.path.join(dest_folder, file)
+                # Always overwrite if the file exists — no renaming
+                if config.action == 'Copy':
+                    shutil.copy2(file_path, dest_path)
+                else:
+                    shutil.move(file_path, dest_path)
+                config.status_label.config(text=f"{config.action}ed: {file}")
+                config.status_label.update_idletasks()
+        messagebox.showinfo('Done', f'Photos {config.action.lower()}ed successfully!')
+        try_load_preview()
+        config.status_label.config(text='Complete.')
 
     def try_load_preview():
         source = source_entry.get().strip()
