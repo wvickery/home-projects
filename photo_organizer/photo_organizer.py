@@ -1,25 +1,32 @@
+# Photo Organizer with Year + Month Toggles, No Date Filters
+
 import os
 import shutil
-from datetime import datetime, timedelta
+from datetime import datetime
 from dataclasses import dataclass
+from collections import defaultdict
 from PIL import Image
 from PIL.ExifTags import TAGS
 import tkinter as tk
 from tkinter import filedialog, messagebox
-from tkcalendar import DateEntry  # 📅 Calendar picker
+from tkcalendar import DateEntry
 
-# Supported image formats
-IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".tiff", ".bmp")
+IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.tiff', '.bmp')
+
+@dataclass
+class FolderStats:
+    new_files: int
+    updated_files: int
+    existing_files: int
 
 @dataclass
 class OrganizerConfig:
     source_dir: str
     dest_dir: str
-    start_date: datetime
-    end_date: datetime
-    action: str  # "Copy" or "Move"
+    action: str
     suffix: str
     status_label: tk.Label
+    included_folders: set
 
 def get_exif_date_taken(image_path):
     try:
@@ -30,142 +37,177 @@ def get_exif_date_taken(image_path):
         for tag_id, value in exif_data.items():
             tag = TAGS.get(tag_id, tag_id)
             if tag == 'DateTimeOriginal':
-                return datetime.strptime(value, "%Y:%m:%d %H:%M:%S")
-    except Exception as e:
-        print(f"EXIF error on {image_path}: {e}")
+                return datetime.strptime(value, '%Y:%m:%d %H:%M:%S')
+    except Exception:
+        pass
     return None
+
+def generate_preview(source_dir, dest_dir, suffix):
+    preview = defaultdict(lambda: defaultdict(lambda: FolderStats(0, 0, 0)))
+    for root, _, files in os.walk(source_dir):
+        for file in files:
+            if not file.lower().endswith(IMAGE_EXTENSIONS):
+                continue
+            file_path = os.path.join(root, file)
+            try:
+                date_taken = get_exif_date_taken(file_path)
+                if not date_taken:
+                    date_taken = datetime.fromtimestamp(os.path.getmtime(file_path))
+                year = str(date_taken.year)
+                month = f"{date_taken.strftime('%m')} - {date_taken.strftime('%b').capitalize()} - {suffix}"
+                stats = preview[year][month]
+                stats.new_files += 1
+
+                dest_folder = os.path.join(dest_dir, year, month)
+                dest_path = os.path.join(dest_folder, file)
+                if os.path.exists(dest_path):
+                    stats.new_files -= 1
+                    stats.updated_files += 1
+                if os.path.exists(dest_folder):
+                    existing = [f for f in os.listdir(dest_folder) if f.lower().endswith(IMAGE_EXTENSIONS)]
+                    stats.existing_files = len(existing)
+            except Exception:
+                continue
+    return preview
 
 def organize_photos(config: OrganizerConfig):
     for root, _, files in os.walk(config.source_dir):
         for file in files:
             if not file.lower().endswith(IMAGE_EXTENSIONS):
                 continue
-
             file_path = os.path.join(root, file)
             date_taken = get_exif_date_taken(file_path)
             if not date_taken:
                 date_taken = datetime.fromtimestamp(os.path.getmtime(file_path))
-
-            if not (config.start_date <= date_taken <= config.end_date):
+            year = str(date_taken.year)
+            month = f"{date_taken.strftime('%m')} - {date_taken.strftime('%b').capitalize()} - {config.suffix}"
+            if (year, month) not in config.included_folders:
                 continue
-
-            year_folder = str(date_taken.year)
-            month_name = date_taken.strftime("%b").capitalize()  # Abbreviated (Jan, Feb, etc.)
-            month_number = date_taken.strftime("%m")
-            month_folder = f"{month_number} - {month_name} - {config.suffix}"
-
-            dest_folder = os.path.join(config.dest_dir, year_folder, month_folder)
+            dest_folder = os.path.join(config.dest_dir, year, month)
             os.makedirs(dest_folder, exist_ok=True)
-
             dest_path = os.path.join(dest_folder, file)
             base, ext = os.path.splitext(dest_path)
             counter = 1
             while os.path.exists(dest_path):
                 dest_path = f"{base}_{counter}{ext}"
                 counter += 1
-
-            if config.action == "Copy":
+            if config.action == 'Copy':
                 shutil.copy2(file_path, dest_path)
             else:
                 shutil.move(file_path, dest_path)
-
             config.status_label.config(text=f"{config.action}ed: {file}")
             config.status_label.update_idletasks()
+    messagebox.showinfo('Done', f'Photos {config.action.lower()}ed successfully!')
+    config.status_label.config(text='Complete.')
 
-    messagebox.showinfo("Done", f"Photos {config.action.lower()}ed successfully!")
-    config.status_label.config(text="Complete.")
+def build_preview_ui(parent_frame, preview_data):
+    check_vars = {}
+    year_vars = {}
 
-def browse_directory(entry):
-    folder_selected = filedialog.askdirectory()
-    if folder_selected:
-        entry.delete(0, tk.END)
-        entry.insert(0, folder_selected)
+    for widget in parent_frame.winfo_children():
+        widget.destroy()
+
+    def toggle_year(year):
+        val = year_vars[year].get()
+        for (y, m), var in check_vars.items():
+            if y == year:
+                var.set(val)
+
+    row = 0
+    for year, months in sorted(preview_data.items()):
+        year_vars[year] = tk.BooleanVar(value=True)
+        year_check = tk.Checkbutton(parent_frame, text=f"{year}/", variable=year_vars[year],
+                                    command=lambda y=year: toggle_year(y), font=("Consolas", 10, "bold"))
+        year_check.grid(row=row, column=0, sticky="w", padx=5, pady=(5, 2))
+        row += 1
+        for month, stats in sorted(months.items()):
+            var = tk.BooleanVar(value=True)
+            check_vars[(year, month)] = var
+            text = f"  {month}/  [{stats.new_files} new, {stats.updated_files} updated, {stats.existing_files} existing]"
+            color = "green" if stats.new_files > 0 and stats.updated_files == 0 else "blue" if stats.updated_files > 0 else "black"
+            cb = tk.Checkbutton(parent_frame, text=text, variable=var, anchor="w", font=("Consolas", 10), fg=color)
+            cb.grid(row=row, column=0, sticky="w", padx=20)
+            row += 1
+    return check_vars
 
 def create_gui():
     root = tk.Tk()
-    root.title("Photo Organizer")
+    root.title("Photo Organizer - Toggle Years + Months")
+    status_label = tk.Label(root, text="Status: Set both folders to generate preview...", fg="blue")
+    status_label.grid(row=0, column=0, columnspan=3, pady=5)
 
-    # Source Folder
-    tk.Label(root, text="Source Folder:").grid(row=0, column=0, sticky="w", padx=10, pady=5)
+    tk.Label(root, text="Source Folder:").grid(row=1, column=0, sticky="w", padx=10)
     source_entry = tk.Entry(root, width=50)
-    source_entry.grid(row=0, column=1, padx=10)
-    tk.Button(root, text="Browse", command=lambda: browse_directory(source_entry)).grid(row=0, column=2)
+    source_entry.grid(row=1, column=1)
+    tk.Button(root, text="Browse", command=lambda: [source_entry.delete(0, tk.END), source_entry.insert(0, filedialog.askdirectory()), try_load_preview()]).grid(row=1, column=2)
 
-    # Destination Folder
-    tk.Label(root, text="Destination Folder:").grid(row=1, column=0, sticky="w", padx=10, pady=5)
+    tk.Label(root, text="Destination Folder:").grid(row=2, column=0, sticky="w", padx=10)
     dest_entry = tk.Entry(root, width=50)
-    dest_entry.grid(row=1, column=1, padx=10)
-    tk.Button(root, text="Browse", command=lambda: browse_directory(dest_entry)).grid(row=1, column=2)
+    dest_entry.grid(row=2, column=1)
+    tk.Button(root, text="Browse", command=lambda: [dest_entry.delete(0, tk.END), dest_entry.insert(0, filedialog.askdirectory()), try_load_preview()]).grid(row=2, column=2)
 
-    # Start Date
-    tk.Label(root, text="Start Date (optional):").grid(row=2, column=0, sticky="w", padx=10, pady=5)
-    start_entry = DateEntry(root, width=20, date_pattern="yyyy-mm-dd")
-    start_entry.delete(0, tk.END)  # Allow blank
-    start_entry.grid(row=2, column=1, sticky="w")
-
-    tk.Button(root, text="Clear", command=lambda: start_entry.delete(0, tk.END)).grid(row=2, column=2, padx=5)
-
-    # End Date
-    tk.Label(root, text="End Date (optional):").grid(row=3, column=0, sticky="w", padx=10, pady=5)
-    end_entry = DateEntry(root, width=20, date_pattern="yyyy-mm-dd")
-    end_entry.delete(0, tk.END)  # Allow blank
-    end_entry.grid(row=3, column=1, sticky="w")
-
-    tk.Button(root, text="Clear", command=lambda: end_entry.delete(0, tk.END)).grid(row=3, column=2, padx=5)
-
-    # Action (Copy or Move)
-    tk.Label(root, text="Action:").grid(row=4, column=0, sticky="w", padx=10, pady=5)
-    action_var = tk.StringVar(value="Copy")
-    action_menu = tk.OptionMenu(root, action_var, "Move", "Copy")
-    action_menu.grid(row=4, column=1, sticky="w")
-
-    # Month Folder Suffix
-    tk.Label(root, text="Month Folder Suffix:").grid(row=5, column=0, sticky="w", padx=10, pady=5)
+    tk.Label(root, text="Folder Suffix:").grid(row=3, column=0, sticky="w", padx=10)
     suffix_entry = tk.Entry(root, width=30)
     suffix_entry.insert(0, "Misc")
-    suffix_entry.grid(row=5, column=1, sticky="w")
+    suffix_entry.grid(row=3, column=1, sticky="w")
 
-    # Status Label
-    status_label = tk.Label(root, text="Status: Waiting to start.", fg="blue")
-    status_label.grid(row=7, column=0, columnspan=3, pady=10)
+    tk.Label(root, text="Action:").grid(row=4, column=0, sticky="w", padx=10)
+    action_var = tk.StringVar(value="Copy")
+    tk.OptionMenu(root, action_var, "Copy", "Move").grid(row=4, column=1, sticky="w")
+
+
+    # Scrollable preview frame setup
+    canvas = tk.Canvas(root, height=300)
+    scrollbar = tk.Scrollbar(root, orient="vertical", command=canvas.yview)
+    scrollable_frame = tk.Frame(canvas)
+    scrollable_frame.bind(
+        "<Configure>",
+        lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+    )
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.grid(row=5, column=0, columnspan=2, sticky="nsew", padx=10, pady=5)
+    scrollbar.grid(row=5, column=2, sticky="ns")
+
+
+    check_vars = {}
+
+    def try_load_preview():
+        source = source_entry.get().strip()
+        dest = dest_entry.get().strip()
+        suffix = suffix_entry.get().strip() or "Misc"
+        if os.path.isdir(source) and os.path.isdir(dest):
+            nonlocal check_vars
+            preview_data = generate_preview(source, dest, suffix)
+            check_vars = build_preview_ui(scrollable_frame, preview_data)
+            status_label.config(text="Preview ready. Select folders and start organizing.", fg="green")
 
     def start_organizing():
         source = source_entry.get().strip()
         dest = dest_entry.get().strip()
-
         if not os.path.isdir(source) or not os.path.isdir(dest):
-            messagebox.showerror("Error", "Both source and destination folders must be valid.")
+            messagebox.showerror("Error", "Valid source and destination required.")
             return
-
         suffix = suffix_entry.get().strip() or "Misc"
-
-        # Handle optional start/end date inputs
-        try:
-            start_input = start_entry.get().strip()
-            end_input = end_entry.get().strip()
-
-            start_date = datetime.strptime(start_input, "%Y-%m-%d") if start_input else datetime.min
-            end_date = datetime.strptime(end_input, "%Y-%m-%d") + timedelta(days=1) if end_input else datetime.now()
-        except ValueError:
-            messagebox.showerror("Error", "Invalid date format. Use YYYY-MM-DD.")
+        included = {k for k, v in check_vars.items() if v.get()}
+        if not included:
+            messagebox.showwarning("Nothing Selected", "No folders selected to organize.")
             return
-
+        if action_var.get() == "Move" and not messagebox.askyesno("Confirm Move", "Are you sure you want to move files?"):
+            return
         config = OrganizerConfig(
             source_dir=source,
             dest_dir=dest,
-            start_date=start_date,
-            end_date=end_date,
             action=action_var.get(),
             suffix=suffix,
-            status_label=status_label
+            status_label=status_label,
+            included_folders=included
         )
-
         organize_photos(config)
 
-    # Start Button
-    tk.Button(root, text="Start Organizing", command=start_organizing, bg="green", fg="white").grid(row=6, column=1, pady=10)
-
+    tk.Button(root, text="Start Organizing", bg="green", fg="white", command=start_organizing).grid(row=6, column=1, pady=10)
     root.mainloop()
 
-if __name__ == "__main__":
+
+if __name__ == '__main__':
     create_gui()
