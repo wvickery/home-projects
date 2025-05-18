@@ -13,7 +13,7 @@ from tkcalendar import DateEntry
 from tkinter import ttk  # for Progressbar
 import threading         # to avoid freezing the UI
 
-IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.tiff', '.bmp')
+MEDIA_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.tiff', '.bmp', '.mp4', '.mov', '.avi', '.mkv')
 
 @dataclass
 class FolderStats:
@@ -52,7 +52,7 @@ def generate_preview(source_dir, dest_dir, suffix):
 
     for root, _, files in os.walk(source_dir):
         for file in files:
-            if not file.lower().endswith(IMAGE_EXTENSIONS):
+            if not file.lower().endswith(MEDIA_EXTENSIONS):
                 continue
 
             file_path = os.path.join(root, file)
@@ -85,7 +85,7 @@ def generate_preview(source_dir, dest_dir, suffix):
             all_dest_paths = {
                 os.path.normpath(os.path.join(folder_path, f))
                 for f in os.listdir(folder_path)
-                if f.lower().endswith(IMAGE_EXTENSIONS)
+                if f.lower().endswith(MEDIA_EXTENSIONS)
             }
             untouched = all_dest_paths - touched
             preview[year][month].existing_files = len(untouched)
@@ -165,7 +165,6 @@ def create_gui():
     action_menu = tk.OptionMenu(root, action_var, "Copy", "Move")
     action_menu.grid(row=4, column=1, sticky="w")
 
-
     # Scrollable preview frame setup
     canvas = tk.Canvas(root, height=300)
     scrollbar = tk.Scrollbar(root, orient="vertical", command=canvas.yview)
@@ -180,6 +179,7 @@ def create_gui():
     scrollbar.grid(row=5, column=2, sticky="ns")
 
     check_vars = {}
+    cancel_requested = [False]  # Mutable flag to allow canceling mid-thread
 
     def set_inputs_enabled(enabled: bool):
         state = "normal" if enabled else "disabled"
@@ -194,12 +194,18 @@ def create_gui():
         root.after(0, lambda: set_inputs_enabled(False))
         root.after(0, lambda: spinner_label.config(text="🗂 Preparing to organize..."))
         root.after(0, lambda: spinner_label.grid(row=6, column=0, columnspan=2, pady=5))
+        root.after(0, lambda: cancel_requested.__setitem__(0, False))  # Reset flag
+        root.after(0, lambda: cancel_button.grid())  # Show cancel button
 
         # Step 2: Build file list
         files_to_process = []
         for root_dir, _, files in os.walk(config.source_dir):
+            if cancel_requested[0]:
+                break
             for file in files:
-                if not file.lower().endswith(IMAGE_EXTENSIONS):
+                if cancel_requested[0]:
+                    break
+                if not file.lower().endswith(MEDIA_EXTENSIONS):
                     continue
                 file_path = os.path.join(root_dir, file)
                 date_taken = get_exif_date_taken(file_path)
@@ -232,7 +238,10 @@ def create_gui():
             config.status_label.config(text=f"{config.action}ed: {os.path.basename(current_file)}")
             root.update_idletasks()
 
+
         for i, (src, dest, year, month) in enumerate(files_to_process, 1):
+            if cancel_requested[0]:
+                break
             os.makedirs(os.path.dirname(dest), exist_ok=True)
             if config.action == 'Copy':
                 shutil.copy2(src, dest)
@@ -243,14 +252,17 @@ def create_gui():
         def finish():
             progress.grid_remove()
             count_label.grid_remove()
+            cancel_button.grid_remove()
             start_button.grid()
-            messagebox.showinfo('Done', f'Photos {config.action.lower()}ed successfully!')
+            if cancel_requested[0]:
+                messagebox.showinfo("Canceled", f"Operation was canceled. Some files may have been {config.action.lower()}ed.")
+            else:
+                messagebox.showinfo("Done", f"Photos {config.action.lower()}ed successfully!")
             try_load_preview()
             config.status_label.config(text='Complete.')
             set_inputs_enabled(True)
 
         root.after(0, finish)
-
 
     def try_load_preview():
         source = source_entry.get().strip()
@@ -299,6 +311,10 @@ def create_gui():
     count_label = tk.Label(root, text="", fg="gray", font=("Consolas", 10))
     start_button = tk.Button(root, text="Start Organizing", bg="green", fg="white", command=start_organizing)
     start_button.grid(row=6, column=1, pady=10)
+
+    cancel_button = tk.Button(root, text="Cancel", bg="red", fg="white", command=lambda: cancel_requested.__setitem__(0, True))
+    cancel_button.grid(row=8, column=1, pady=(0, 10))
+    cancel_button.grid_remove()  # Hide by default
 
     root.mainloop()
 
